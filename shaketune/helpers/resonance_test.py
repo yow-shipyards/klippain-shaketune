@@ -193,11 +193,15 @@ class ResonanceTestManager:
         s_accel = base_s_accel
 
         if s_period > 0:
+            ConsoleOutput.print('Using pulse with sweeping acceleration test')
             gen = SweepingVibrationGenerator(final_min_f, final_max_f, final_aph, final_hps, s_accel, s_period)
         else:
+            ConsoleOutput.print('Using pulse-only test')
             gen = BaseVibrationGenerator(final_min_f, final_max_f, final_aph, final_hps)
 
         test_seq = gen.gen_test()
+        ConsoleOutput.print(f'Test sequence generated ({len(test_seq)} steps)')
+        ConsoleOutput.print(f'Test sequence: {test_seq}')
         self._run_test_sequence(axis_direction, test_seq)
         self.toolhead.wait_moves()
 
@@ -216,7 +220,6 @@ class ResonanceTestManager:
         X, Y, Z, E = toolhead.get_position()
 
         old_max_accel = toolhead_info['max_accel']
-        old_mcr = toolhead_info.get('minimum_cruise_ratio', 1.0)
 
         # Set velocity limits
         if test_seq:
@@ -224,7 +227,12 @@ class ResonanceTestManager:
         else:
             max_accel = old_max_accel  # no moves, just default
 
-        gcode.run_script_from_command(f'SET_VELOCITY_LIMIT ACCEL={max_accel:.3f} MINIMUM_CRUISE_RATIO=0')
+        if 'minimum_cruise_ratio' in toolhead_info:  # minimum_cruise_ratio found: Klipper >= v0.12.0-239
+            old_mcr = toolhead_info['minimum_cruise_ratio']
+            gcode.run_script_from_command(f'SET_VELOCITY_LIMIT ACCEL={max_accel} MINIMUM_CRUISE_RATIO=0')
+        else:  # minimum_cruise_ratio not found: Klipper < v0.12.0-239
+            old_mcr = None
+            gcode.run_script_from_command(f'SET_VELOCITY_LIMIT ACCEL={max_accel}')
 
         # Disable input shaper if present
         input_shaper = self.toolhead.printer.lookup_object('input_shaper', None)
@@ -281,10 +289,11 @@ class ResonanceTestManager:
             gcode.run_script_from_command(f'M204 S={old_max_accel:.3f}')
             toolhead.move([X + ddX, Y + ddY, Z + ddZ, E], abs(last_v))
 
-        # Restore original limits
-        gcode.run_script_from_command(
-            f'SET_VELOCITY_LIMIT ACCEL={old_max_accel:.3f} MINIMUM_CRUISE_RATIO={old_mcr:.3f}'
-        )
+        # Restore the previous acceleration values
+        if old_mcr is not None:  # minimum_cruise_ratio found: Klipper >= v0.12.0-239
+            gcode.run_script_from_command(f'SET_VELOCITY_LIMIT ACCEL={old_max_accel} MINIMUM_CRUISE_RATIO={old_mcr}')
+        else:  # minimum_cruise_ratio not found: Klipper < v0.12.0-239
+            gcode.run_script_from_command(f'SET_VELOCITY_LIMIT ACCEL={old_max_accel}')
 
         # Re-enable input shaper if disabled
         if input_shaper is not None:
